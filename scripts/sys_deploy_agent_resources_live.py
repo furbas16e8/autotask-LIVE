@@ -9,6 +9,7 @@ import shutil
 import logging
 import getpass
 import re
+import hashlib
 from pathlib import Path
 
 def obter_usuario_sanitizado() -> str:
@@ -18,6 +19,81 @@ def obter_usuario_sanitizado() -> str:
         username = "desconhecido"
     # Mantém apenas caracteres alfanuméricos, hífen e sublinhado
     return re.sub(r"[^a-zA-Z0-9_\-]", "_", username)
+
+
+def extrair_metadados_yaml(caminho_arquivo: Path) -> dict:
+    """
+    Abre o arquivo Markdown e lê as linhas iniciais delimitadas por '---'.
+    Extrai chaves e valores estruturados.
+    """
+    metadados = {}
+    if not caminho_arquivo.is_file():
+        return metadados
+    try:
+        lines = []
+        with open(caminho_arquivo, "r", encoding="utf-8", errors="ignore") as f:
+            for _ in range(100):  # Limite de segurança para evitar arquivos muito longos
+                line = f.readline()
+                if not line:
+                    break
+                lines.append(line.strip())
+        
+        if not lines or lines[0] != "---":
+            return metadados
+            
+        for line in lines[1:]:
+            if line == "---":
+                break
+            if ":" in line:
+                parts = line.split(":", 1)
+                chave = parts[0].strip().lower()
+                valor = parts[1].strip()
+                if valor.startswith('"') and valor.endswith('"'):
+                    valor = valor[1:-1]
+                elif valor.startswith("'") and valor.endswith("'"):
+                    valor = valor[1:-1]
+                metadados[chave] = valor
+    except Exception as e:
+        logging.debug(f"Erro ao extrair metadados YAML de {caminho_arquivo.name}: {e}")
+    return metadados
+
+
+def calcular_hash_arquivo(caminho: Path) -> str:
+    """Calcula o hash SHA-256 de um arquivo."""
+    sha256 = hashlib.sha256()
+    try:
+        with open(caminho, "rb") as f:
+            for bloco in iter(lambda: f.read(65536), b""):
+                sha256.update(bloco)
+        return sha256.hexdigest()
+    except Exception as e:
+        logging.error(f"Erro ao calcular hash de {caminho}: {e}")
+        return ""
+
+
+def calcular_hash_diretorio(caminho: Path) -> str:
+    """Calcula recursivamente o hash SHA-256 consolidado de um diretório."""
+    sha256 = hashlib.sha256()
+    if not caminho.is_dir():
+        return ""
+    try:
+        arquivos = []
+        for item in caminho.rglob("*"):
+            if item.is_file():
+                arquivos.append(item)
+        arquivos.sort(key=lambda p: p.relative_to(caminho))
+
+        for arquivo in arquivos:
+            rel_path = str(arquivo.relative_to(caminho)).replace("\\", "/")
+            sha256.update(rel_path.encode("utf-8"))
+            with open(arquivo, "rb") as f:
+                for bloco in iter(lambda: f.read(65536), b""):
+                    sha256.update(bloco)
+        return sha256.hexdigest()
+    except Exception as e:
+        logging.error(f"Erro ao calcular hash do diretório {caminho}: {e}")
+        return ""
+
 
 
 def setup_logging() -> None:
@@ -136,10 +212,95 @@ def copiar_diretorio_com_lock_check(origem: Path, destino: Path) -> int:
     return total_bytes
 
 
+def sincronizar_repositorio_git(caminho_repo: Path) -> None:
+    """Verifica se o repositório Git de origem está atualizado e realiza sincronização se necessário."""
+    import subprocess
+    
+    # Verifica se a pasta existe e se é um repositório git
+    if not (caminho_repo / ".git").is_dir():
+        logging.info("O diretório de origem não é um repositório Git ou o .git não está acessível. Pulando sincronização git.")
+        return
+
+    logging.info("Verificando se o repositório de workflows está atualizado com o remoto...")
+    try:
+        # Executa git fetch para atualizar as informações do remoto
+        subprocess.run(
+            ["git", "fetch"],
+            cwd=caminho_repo,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=15
+        )
+        
+        # Compara HEAD com a branch upstream correspondente
+        local_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=caminho_repo,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True
+        ).stdout.strip()
+        
+        upstream_sha_cmd = subprocess.run(
+            ["git", "rev-parse", "@{u}"],
+            cwd=caminho_repo,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        if upstream_sha_cmd.returncode != 0:
+            logging.info("Nenhum branch upstream configurado. Pulando pull automático.")
+            return
+            
+        upstream_sha = upstream_sha_cmd.stdout.strip()
+        
+        if local_sha != upstream_sha:
+            # Verifica se está atrás (behind)
+            base_sha = subprocess.run(
+                ["git", "merge-base", "HEAD", "@{u}"],
+                cwd=caminho_repo,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            ).stdout.strip()
+            
+            if local_sha == base_sha:
+                logging.info("O repositório local está desatualizado (atrás do remoto). Executando 'git pull'...")
+                pull_res = subprocess.run(
+                    ["git", "pull"],
+                    cwd=caminho_repo,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                if pull_res.returncode == 0:
+                    logging.info("Repositório de workflows sincronizado com sucesso via git pull.")
+                else:
+                    logging.warning(f"Falha ao executar 'git pull' (pode haver conflitos locais): {pull_res.stderr.strip()}")
+            elif upstream_sha == base_sha:
+                logging.info("O repositório local está à frente do remoto (ahead). Nenhuma sincronização necessária.")
+            else:
+                logging.warning("Os repositórios local e remoto divergiram. Recomenda-se resolução manual. Pulando pull automático.")
+        else:
+            logging.info("O repositório de workflows já está atualizado com o remoto.")
+            
+    except subprocess.TimeoutExpired:
+        logging.warning("Timeout ao tentar se comunicar com o remoto do Git. Pulando sincronização git.")
+    except Exception as e:
+        logging.warning(f"Não foi possível sincronizar o repositório via Git: {e}. Prosseguindo com deploy local.")
+
+
 def deploy_agent_resources():
     # --- Parte 1: Workflows ---
     origem_dir = resolver_caminho_origem()
     destino_dir = resolver_caminho_destino()
+
+    # Sincroniza a origem (repositório workflows) antes de prosseguir
+    sincronizar_repositorio_git(origem_dir.parent)
 
     logging.info("Iniciando deploy de workflows globais (Teste Live).")
     logging.info(f"Origem resolvida: {origem_dir}")
@@ -164,15 +325,42 @@ def deploy_agent_resources():
 
             for arquivo in arquivos_md:
                 destino_arquivo = destino_dir / arquivo.name
-                try:
-                    bytes_copiados = copiar_arquivo_com_lock_check(arquivo, destino_arquivo)
-                    total_bytes += bytes_copiados
-                    arquivos_copiados.append(arquivo.name)
-                    kb_copiados = bytes_copiados / 1024
-                    logging.info(f"Copiado: {arquivo.name} ({kb_copiados:.2f} KB)")
-                except Exception as e:
-                    logging.error(f"Falha ao copiar '{arquivo.name}': {e}")
-                    erros += 1
+                
+                # Extrai metadados para auditoria/logs
+                meta_orig = extrair_metadados_yaml(arquivo)
+                meta_dest = extrair_metadados_yaml(destino_arquivo) if destino_arquivo.exists() else {}
+                
+                versao_orig = meta_orig.get("version", "desconhecida")
+                versao_dest = meta_dest.get("version", "desconhecida")
+                
+                status_recurso = "INALTERADO"
+                precisa_copiar = False
+                
+                if not destino_arquivo.exists():
+                    status_recurso = "NOVO"
+                    precisa_copiar = True
+                else:
+                    hash_orig = calcular_hash_arquivo(arquivo)
+                    hash_dest = calcular_hash_arquivo(destino_arquivo)
+                    if hash_orig != hash_dest:
+                        status_recurso = "ATUALIZADO"
+                        precisa_copiar = True
+
+                if precisa_copiar:
+                    try:
+                        bytes_copiados = copiar_arquivo_com_lock_check(arquivo, destino_arquivo)
+                        total_bytes += bytes_copiados
+                        arquivos_copiados.append(arquivo.name)
+                        kb_copiados = bytes_copiados / 1024
+                        if status_recurso == "NOVO":
+                            logging.info(f"[NOVO] Copiado: {arquivo.name} ({kb_copiados:.2f} KB) - Versão: {versao_orig}")
+                        else:
+                            logging.info(f"[ATUALIZADO] Atualizado: {arquivo.name} ({kb_copiados:.2f} KB) - Versão antiga: {versao_dest} -> Nova: {versao_orig}")
+                    except Exception as e:
+                        logging.error(f"Falha ao copiar '{arquivo.name}': {e}")
+                        erros += 1
+                else:
+                    logging.info(f"[INALTERADO] Ignorado (já atualizado): {arquivo.name} - Versão: {versao_dest}")
 
             if erros > 0:
                 logging.warning(f"Total de falhas (arquivos ignorados/bloqueados): {erros}")
@@ -206,14 +394,52 @@ def deploy_agent_resources():
 
             for pasta in pastas_skills:
                 destino_pasta = destino_skills / pasta.name
-                try:
-                    bytes_copiados = copiar_diretorio_com_lock_check(pasta, destino_pasta)
-                    total_bytes += bytes_copiados
-                    pastas_copiadas.append(pasta.name)
-                    logging.info(f"Copiada pasta de skill: {pasta.name} ({bytes_copiados / 1024:.2f} KB)")
-                except Exception as e:
-                    logging.error(f"Falha ao copiar pasta de skill '{pasta.name}': {e}")
-                    erros_skills += 1
+                
+                # Extrai metadados do arquivo SKILL.md se ele existir
+                skill_md_orig = pasta / "SKILL.md"
+                skill_md_dest = destino_pasta / "SKILL.md"
+                
+                meta_orig = extrair_metadados_yaml(skill_md_orig) if skill_md_orig.exists() else {}
+                meta_dest = extrair_metadados_yaml(skill_md_dest) if skill_md_dest.exists() else {}
+                
+                versao_orig = meta_orig.get("version", "desconhecida")
+                versao_dest = meta_dest.get("version", "desconhecida")
+                
+                status_recurso = "INALTERADO"
+                precisa_copiar = False
+                
+                if not destino_pasta.exists():
+                    status_recurso = "NOVO"
+                    precisa_copiar = True
+                else:
+                    hash_orig = calcular_hash_diretorio(pasta)
+                    hash_dest = calcular_hash_diretorio(destino_pasta)
+                    if hash_orig != hash_dest:
+                        status_recurso = "ATUALIZADO"
+                        precisa_copiar = True
+
+                if precisa_copiar:
+                    try:
+                        # Limpeza atômica da pasta destino (se existia)
+                        if destino_pasta.exists():
+                            try:
+                                shutil.rmtree(destino_pasta)
+                            except Exception as e:
+                                logging.warning(f"Não foi possível remover completamente a pasta de destino '{destino_pasta.name}' antes de recriar: {e}. Sobrescrevendo arquivos existentes.")
+                        
+                        bytes_copiados = copiar_diretorio_com_lock_check(pasta, destino_pasta)
+                        total_bytes += bytes_copiados
+                        pastas_copiadas.append(pasta.name)
+                        kb_copiados = bytes_copiados / 1024
+                        if status_recurso == "NOVO":
+                            logging.info(f"[NOVO] Copiada pasta de skill: {pasta.name} ({kb_copiados:.2f} KB) - Versão: {versao_orig}")
+                        else:
+                            logging.info(f"[ATUALIZADO] Atualizada pasta de skill: {pasta.name} ({kb_copiados:.2f} KB) - Versão antiga: {versao_dest} -> Nova: {versao_orig}")
+                    except Exception as e:
+                        logging.error(f"Falha ao copiar pasta de skill '{pasta.name}': {e}")
+                        erros_skills += 1
+                else:
+                    logging.info(f"[INALTERADO] Ignorada pasta de skill (já atualizada): {pasta.name} - Versão: {versao_dest}")
 
             if erros_skills > 0:
                 logging.warning(f"Total de falhas de skills (pastas ignoradas/bloqueados): {erros_skills}")
