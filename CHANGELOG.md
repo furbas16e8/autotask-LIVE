@@ -8,6 +8,9 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 ## [Não publicado]
 
 ### Adicionado
-- Sincronização automática de skills da pasta de origem `../GitHub/workflows/skills` para a pasta global de plugins do Gemini `.gemini/config/plugins/minhas-skills` no script `sys_deploy_workflows_live.py`.
-- Criação automática da pasta `minhas-skills` caso ela não exista.
-- Cálculo e exibição em MB do tamanho recursivo ocupado pelas pastas de destino (`global_workflows` e `minhas-skills`) e do espaço total copiado ao final da execução.
+- Sincronização automática de pastas de skills (contendo `SKILL.md`) sob a pasta de origem `../GitHub/workflows/skills` para a pasta global de skills do Antigravity `.gemini/config/skills` no script `sys_deploy_agent_resources_live.py`.
+- Criação automática da pasta `skills` do Gemini caso ela não exista.
+- Cálculo e exibição em MB do tamanho recursivo ocupado pelas pastas de destino (`global_workflows` e `skills`) e do espaço total copiado ao final da execução.
+
+### Modificado
+- Renomeado o script utilitário `sys_deploy_workflows_live.py` para `sys_deploy_agent_resources_live.py` para refletir a cobertura de múltiplos recursos do agente, mantendo um wrapper legado para compatibilidade.

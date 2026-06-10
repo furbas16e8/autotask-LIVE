@@ -7,6 +7,9 @@
 		{
 			"name": "autotask-LIVE",
 			"path": "."
+		},
+		{
+			"path": "../workflows"
 		}
 	],
 	"settings": {

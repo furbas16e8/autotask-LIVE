@@ -20,7 +20,7 @@ autotask-LIVE/
 │   ├── file_organize_downloads_live.py      # Organizador automático de Downloads
 │   ├── sync_compress_vault_live.py          # Backup do Obsidian Vault (AES-256)
 │   ├── sys_clean_temp_live.py               # Limpeza de arquivos temporários
-│   └── sys_deploy_workflows_live.py         # Sincronização de workflows globais
+│   └── sys_deploy_agent_resources_live.py   # Sincronização de recursos do agente (workflows e skills)
 ├── blueprints/
 │   └── blueprint_20260526_AUTOTASK-Live.html # Documento técnico de arquitetura
 ├── README.md                                # Documentação do projeto
@@ -75,7 +75,7 @@ O AUTOTASK LIVE separa o repositório de código privado da máquina cliente atr
        "1" = @{ file = "file_organize_downloads_live.py"; label = "Organizar Downloads" }
        "2" = @{ file = "sync_compress_vault_live.py";    label = "Backup do Vault (Obsidian)" }
        "3" = @{ file = "sys_clean_temp_live.py";         label = "Limpar Temp do Sistema" }
-       "4" = @{ file = "sys_deploy_workflows_live.py";    label = "Deploy de Workflows Globais" }
+       "4" = @{ file = "sys_deploy_agent_resources_live.py"; label = "Deploy de Recursos do Agente" }
    }
 
    Clear-Host

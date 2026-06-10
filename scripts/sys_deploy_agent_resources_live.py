@@ -1,7 +1,7 @@
 """
-sys_deploy_workflows_live.py
-────────────────────────────
-Sincronização de arquivos de workflows Markdown (.md) locais para a pasta global (VERSÃO TESTE LIVE).
+sys_deploy_agent_resources_live.py
+──────────────────────────────────
+Sincronização de workflows globais e pastas de skills locais para as pastas globais do Gemini (VERSÃO TESTE LIVE).
 """
 
 import sys
@@ -24,7 +24,7 @@ def setup_logging() -> None:
     log_dir = Path(__file__).resolve().parent.parent / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     username = obter_usuario_sanitizado()
-    log_file = log_dir / f"sys_deploy_workflows_live_{username}.log"
+    log_file = log_dir / f"sys_deploy_agent_resources_live_{username}.log"
 
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
@@ -91,7 +91,7 @@ def resolver_caminho_skills_origem() -> Path:
 
 def resolver_caminho_skills_destino() -> Path:
     """Resolve dinamicamente o caminho da pasta global de skills do Gemini."""
-    return Path.home() / ".gemini" / "config" / "plugins" / "minhas-skills"
+    return Path.home() / ".gemini" / "config" / "skills"
 
 
 def obter_tamanho_diretorio_mb(diretorio: Path) -> float:
@@ -123,7 +123,20 @@ def copiar_arquivo_com_lock_check(origem: Path, destino: Path) -> int:
     return origem.stat().st_size
 
 
-def deploy_workflows():
+def copiar_diretorio_com_lock_check(origem: Path, destino: Path) -> int:
+    """Copia recursivamente um diretório para o destino, verificando locks de arquivos e retornando o tamanho em bytes."""
+    destino.mkdir(parents=True, exist_ok=True)
+    total_bytes = 0
+    for item in origem.iterdir():
+        destino_item = destino / item.name
+        if item.is_dir():
+            total_bytes += copiar_diretorio_com_lock_check(item, destino_item)
+        elif item.is_file():
+            total_bytes += copiar_arquivo_com_lock_check(item, destino_item)
+    return total_bytes
+
+
+def deploy_agent_resources():
     # --- Parte 1: Workflows ---
     origem_dir = resolver_caminho_origem()
     destino_dir = resolver_caminho_destino()
@@ -182,43 +195,41 @@ def deploy_workflows():
         # Garante que a pasta de destino exista
         destino_skills.mkdir(parents=True, exist_ok=True)
 
-        # Varre todos os arquivos na origem de skills
-        arquivos_skills = [p for p in origem_skills.glob("*") if p.is_file()]
+        # Varre todos os subdiretórios na origem de skills
+        pastas_skills = [p for p in origem_skills.glob("*") if p.is_dir()]
         
-        if not arquivos_skills:
-            logging.info("Nenhum arquivo encontrado para copiar na pasta de origem de skills.")
+        if not pastas_skills:
+            logging.info("Nenhuma pasta de skill encontrada para copiar na pasta de origem de skills.")
         else:
-            arquivos_copiados_skills = []
+            pastas_copiadas = []
             erros_skills = 0
 
-            for arquivo in arquivos_skills:
-                destino_arquivo = destino_skills / arquivo.name
+            for pasta in pastas_skills:
+                destino_pasta = destino_skills / pasta.name
                 try:
-                    bytes_copiados = copiar_arquivo_com_lock_check(arquivo, destino_arquivo)
+                    bytes_copiados = copiar_diretorio_com_lock_check(pasta, destino_pasta)
                     total_bytes += bytes_copiados
-                    arquivos_copiados_skills.append(arquivo.name)
-                    kb_copiados = bytes_copiados / 1024
-                    logging.info(f"Copiado (Skill): {arquivo.name} ({kb_copiados:.2f} KB)")
+                    pastas_copiadas.append(pasta.name)
+                    logging.info(f"Copiada pasta de skill: {pasta.name} ({bytes_copiados / 1024:.2f} KB)")
                 except Exception as e:
-                    logging.error(f"Falha ao copiar skill '{arquivo.name}': {e}")
+                    logging.error(f"Falha ao copiar pasta de skill '{pasta.name}': {e}")
                     erros_skills += 1
 
             if erros_skills > 0:
-                logging.warning(f"Total de falhas de skills (arquivos ignorados/bloqueados): {erros_skills}")
+                logging.warning(f"Total de falhas de skills (pastas ignoradas/bloqueados): {erros_skills}")
 
     logging.info("Deploy de skills (Teste Live) concluído.")
     tamanho_dest_skills_mb = obter_tamanho_diretorio_mb(destino_skills)
-    logging.info(f"Tamanho total da pasta de destino minhas-skills: {tamanho_dest_skills_mb:.2f} MB")
+    logging.info(f"Tamanho total da pasta de destino skills: {tamanho_dest_skills_mb:.2f} MB")
 
     # Volume total copiado (Regra 5)
     total_copiado_mb = total_bytes / (1024 * 1024)
     logging.info(f"Espaço total copiado: {total_copiado_mb:.2f} MB")
 
 
-
 if __name__ == "__main__":
     setup_logging()
     try:
-        deploy_workflows()
+        deploy_agent_resources()
     except Exception as e:
         logging.exception(f"Erro fatal na execução do deploy: {e}")
